@@ -1,10 +1,13 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 
+use errno::errno;
+use libc::{
+    self, accept, bind, fcntl, fd_set, htons, listen, recv, select, sockaddr, sockaddr_in, socket,
+    timeval, AF_INET, FD_ISSET, FD_SET, FD_ZERO, F_SETFL, IPPROTO_TCP, O_NONBLOCK, SOCK_STREAM,
+};
 use std::{ffi::CString, io::stdout};
 
-use libc::{
-    accept, bind, htons, listen, sockaddr, sockaddr_in, socket, AF_INET, IPPROTO_TCP, SOCK_STREAM,
-};
+const MAX_CLIENTS: usize = 1024;
 
 fn main() {
     // step 1 => create: socket use socket syscall with AF_INET, SOCK_STREAM and IPPROTO_TCP
@@ -12,9 +15,17 @@ fn main() {
 
     unsafe {
         let socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
         if socket_fd == -1 {
             println!("Error creating socket");
+        }
+
+        let flags = fcntl(socket_fd, libc::F_GETFL);
+        if flags == -1 {
+            println!("Error getting socket flags");
+        } else {
+            if fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK) == -1 {
+                println!("Erorr setting 0 _NONBLOCK")
+            }
         }
 
         println!("{}", socket_fd);
@@ -32,46 +43,81 @@ fn main() {
             &addr as *const sockaddr_in as *const libc::sockaddr,
             std::mem::size_of::<sockaddr_in>() as u32,
         );
-
         if bind_result == -1 {
             libc::perror(b"Error in binding\0".as_ptr() as *const i8);
             return;
         }
-
         println!("Binding Result: {}", bind_result);
 
         let listen_result = listen(socket_fd, 1);
-
         if listen_result == -1 {
             println!("Error in listen!");
             return;
         }
-
         println!("Server is listening for connections...");
 
-        loop {
-            let client_sock = accept(socket_fd, std::ptr::null_mut(), std::ptr::null_mut());
+        let mut client_fds: Vec<i32> = vec![socket_fd];
 
-            if client_sock == -1 {
-                println!("Error inc client sock");
-                return;
+        loop {
+            let mut read_fds: fd_set = std::mem::zeroed();
+            FD_ZERO(&mut read_fds);
+
+            let mut max_fd = socket_fd;
+            for &fd in &client_fds {
+                FD_SET(fd, &mut read_fds);
+                if fd > max_fd {
+                    max_fd = fd;
+                }
             }
 
-            println!("Client connected {}", client_sock);
-            let mut buffer = [0u8; 1024];
+            let timeout = timeval {
+                tv_sec: 5,
+                tv_usec: 0,
+            };
 
-            let bytes_received = libc::recv(
-                client_sock,
-                buffer.as_mut_ptr() as *mut libc::c_void,
-                buffer.len(),
-                0, // No special flags
+            let ready_count = select(
+                max_fd + 1,
+                &mut read_fds,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &timeout as *const timeval as *mut timeval,
             );
 
-            if bytes_received > 0 {
-                let received_data = String::from_utf8_lossy(&buffer[..bytes_received as usize]);
-                println!("Received data: {}", received_data);
-            } else {
-                println!("Client disconnected or error receiving data");
+            if ready_count == -1 {
+                println!("Error in select!");
+                break;
+            }
+
+            if FD_ISSET(socket_fd, &read_fds) {
+                let client_sock = accept(socket_fd, std::ptr::null_mut(), std::ptr::null_mut());
+                if client_sock != -1 {
+                    println!("Client connected {}", client_sock);
+                    client_fds.push(client_sock);
+                }
+            }
+            for &client in &client_fds {
+                if client != socket_fd && FD_ISSET(client, &read_fds) {
+                    let mut buffer = [0u8; 1024];
+                    let bytes_received = recv(
+                        client,
+                        buffer.as_mut_ptr() as *mut libc::c_void,
+                        buffer.len(),
+                        0,
+                    );
+
+                    if bytes_received == -1 {
+                        let errno_val = errno().0;
+                        if errno_val == libc::EAGAIN || errno_val == libc::EWOULDBLOCK {
+                            println!("No data available yet, will try again later");
+                        } else {
+                            println!("Error receiving data: {}", errno_val);
+                        }
+                    } else if bytes_received > 0 {
+                        let received_data =
+                            String::from_utf8_lossy(&buffer[..bytes_received as usize]);
+                        println!("Received from {}: {}", client, received_data);
+                    }
+                }
             }
         }
     }
