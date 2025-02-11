@@ -10,9 +10,6 @@ use std::{ffi::CString, io::stdout};
 const MAX_CLIENTS: usize = 1024;
 
 fn main() {
-    // step 1 => create: socket use socket syscall with AF_INET, SOCK_STREAM and IPPROTO_TCP
-    // this returns a fd for socket and -1 for error;
-
     unsafe {
         let socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if socket_fd == -1 {
@@ -88,6 +85,10 @@ fn main() {
                 break;
             }
 
+            if ready_count == 0 {
+                println!("no clients yet");
+            }
+
             if FD_ISSET(socket_fd, &read_fds) {
                 let client_sock = accept(socket_fd, std::ptr::null_mut(), std::ptr::null_mut());
                 if client_sock != -1 {
@@ -95,6 +96,7 @@ fn main() {
                     client_fds.push(client_sock);
                 }
             }
+
             for &client in &client_fds {
                 if client != socket_fd && FD_ISSET(client, &read_fds) {
                     let mut buffer = [0u8; 1024];
@@ -136,3 +138,5 @@ fn convert_ip_to_in_addr(ip: &str) -> libc::in_addr {
             | (octets[3] as u32),
     }
 }
+
+// server wali rust
