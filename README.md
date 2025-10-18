@@ -1,9 +1,1 @@
-8yo
-2
-3
-k
-df
-6
-fdf
-e
-f
+readme
