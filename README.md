@@ -1,2 +1,2 @@
-readme
+areadme
 update
